@@ -39,6 +39,15 @@ for arg in "$@"; do
   esac
 done
 
+# ── Preflight ────────────────────────────────────────────────────────────────
+# shellcheck source=scripts/lib/preflight.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/preflight.sh"
+if [ "$DRY_RUN" = true ]; then
+  preflight_require jq || exit 1
+else
+  preflight_require jq soroban cargo || exit 1
+fi
+
 # ── Configuration ────────────────────────────────────────────────────────────
 
 NETWORK="${NETWORK:-testnet}"

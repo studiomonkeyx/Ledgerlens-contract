@@ -27,6 +27,18 @@ for arg in "$@"; do
   prev="$arg"
 done
 
+case "${MODE:-}" in
+  hang) exec sleep 60 ;;
+  slowloris) while :; do printf 'x'; sleep 1; done ;;
+  contradictory)
+    case "$fn" in
+      is_paused) echo "maybe"; exit 0 ;;
+      is_service_alive) echo "false"; exit 0 ;;
+      get_version) echo "not-a-number"; exit 0 ;;
+    esac
+    ;;
+esac
+
 case "$fn" in
   get_admin)
     if [ "${MODE:-}" = "admin_unreachable" ]; then
@@ -92,6 +104,41 @@ assert_exit "pending upgrade present exits 0" 0 \
 # ── Adversarial: RPC/node unreachable on a core call must be reported, not silently swallowed ──
 assert_exit "unreachable admin call exits non-zero" 1 \
   env PATH="$STUB_DIR:$PATH" MODE=admin_unreachable "$HEALTH_CHECK" testnet CONTRACT123 health-check
+
+# ── Pathological targets: bounded time, distinct TIMEOUT result (exit 2) ────
+# 6 calls, each killed after HC_CALL_TIMEOUT_SECS (+1s grace): worst case 12s.
+export HC_CALL_TIMEOUT_SECS=1
+WORST_CASE_SECS=$((6 * (HC_CALL_TIMEOUT_SECS + 1)))
+
+assert_bounded() {
+  local desc="$1" expected="$2" mode="$3" start elapsed actual=0
+  start=$(date +%s)
+  env PATH="$STUB_DIR:$PATH" MODE="$mode" "$HEALTH_CHECK" testnet CONTRACT123 health-check >"$OUT_FILE" 2>&1 || actual=$?
+  elapsed=$(( $(date +%s) - start ))
+  if [ "$actual" -eq "$expected" ] && [ "$elapsed" -le "$WORST_CASE_SECS" ]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    echo "FAIL: $desc (exit $actual, expected $expected; ${elapsed}s, bound ${WORST_CASE_SECS}s)"
+    cat "$OUT_FILE"
+  fi
+}
+
+assert_bounded "hanging target times out with exit 2" 2 hang
+grep -q '^TIMEOUT ' "$OUT_FILE" || { fail=$((fail + 1)); echo "FAIL: hang not labeled TIMEOUT"; }
+assert_bounded "slow-drip target times out with exit 2" 2 slowloris
+grep -q '^TIMEOUT ' "$OUT_FILE" || { fail=$((fail + 1)); echo "FAIL: slowloris not labeled TIMEOUT"; }
+assert_bounded "contradictory responses fail (exit 1), not pass or timeout" 1 contradictory
+grep -q "unexpected response" "$OUT_FILE" || { fail=$((fail + 1)); echo "FAIL: contradictory response not flagged"; }
+assert_bounded "clean pass stays exit 0 under the timeout wrapper" 0 healthy
+
+# ── Missing required binary fails early with a clear message ───────────────
+EMPTY_BIN=$(mktemp -d)
+for tool in bash dirname mktemp cat rm date; do ln -s "$(type -P "$tool")" "$EMPTY_BIN/$tool"; done
+assert_exit "missing soroban fails at preflight" 1 \
+  env PATH="$EMPTY_BIN" "$(type -P bash)" "$HEALTH_CHECK" testnet CONTRACT123 health-check
+grep -q "PREFLIGHT ERROR" "$OUT_FILE" || { fail=$((fail + 1)); echo "FAIL: no preflight message"; cat "$OUT_FILE"; }
+rm -rf "$EMPTY_BIN"
 
 echo ""
 echo "$pass passed, $fail failed"

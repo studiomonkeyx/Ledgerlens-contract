@@ -224,3 +224,14 @@ migration guide, deprecation entry, or version bump is required.
   `scripts/health_check.test.sh`, `scripts/test-deploy-manifest-validation.sh`.
 - Live proof (post-merge, maintainer-run): push a test branch with a failing
   canary assertion, observe rollback + failure issue on the staging run.
+
+### Rollback when entries are archived
+
+If the previous version has been inactive long enough for instance or
+persistent entries to lapse into the archived state, calls fail with an
+archived-entry error until restored. `scripts/rollback.sh` detects that
+error on any contract call, runs `soroban contract restore --id <contract>
+--durability persistent`, and retries once, so the operator does not have to
+debug it mid-rollback. If `health_check.sh` still reports an archived entry
+it prints a `HINT` with the restore command. Regression test:
+`scripts/test-rollback-restore.sh`.

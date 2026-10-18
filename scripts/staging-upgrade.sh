@@ -115,6 +115,14 @@ run() {
   fi
 }
 
+# shellcheck source=scripts/lib/preflight.sh
+source "$SCRIPT_DIR/lib/preflight.sh"
+if [ "$DRY_RUN" = true ]; then
+  preflight_require sha256sum || die "preflight failed"
+else
+  preflight_require sha256sum 'stellar|soroban' || die "preflight failed"
+fi
+
 detect_cli() {
   if command -v stellar >/dev/null 2>&1; then echo "stellar"; return; fi
   if command -v soroban >/dev/null 2>&1; then echo "soroban"; return; fi

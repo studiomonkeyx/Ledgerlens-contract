@@ -30,6 +30,7 @@ EVIDENCE_DIR="$TMP_DIR/evidence"
 STATUS_FILE="$TMP_DIR/staging.json"
 trap 'rm -rf "$TMP_DIR"' EXIT
 mkdir -p "$STUB_DIR" "$EVIDENCE_DIR"
+chmod 755 "$TMP_DIR" "$STUB_DIR"
 
 pass=0
 fail=0

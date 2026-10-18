@@ -533,3 +533,8 @@ After every key-rotation operation (production or rehearsal), a post-action repo
 - For threshold attestation ceremonies: the ceremony ID, transcript hash, aggregate
   public key, and the signed attestation report (§0.8)
 - Any deviations, aborts, or manual interventions
+
+## Tooling preflight
+
+Rotation scripts verify their binaries before touching key material; see
+`docs/script-preflight.md` for the convention and the hash-pinning decision.

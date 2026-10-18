@@ -36,6 +36,49 @@ run() {
 
 log() { echo "==> $*"; }
 
+# shellcheck source=scripts/lib/preflight.sh
+source "$ROLLBACK_DIR/lib/preflight.sh"
+if [ "$DRY_RUN" = true ]; then
+  preflight_require sha256sum awk || exit 1
+else
+  preflight_require sha256sum awk soroban || exit 1
+fi
+
+# ── Archived-entry handling ───────────────────────────────────
+# After a long gap, instance/persistent entries may have lapsed into the
+# archived state; any call touching them then fails until they are restored.
+ARCHIVED_PATTERN='archived|entry (is )?expired|ExpiredEntry|restore (the )?(footprint|entr)|RestoreFootprint'
+
+restore_entries() {
+  log "Restoring archived contract instance/storage entries for $TARGET_CONTRACT_ID"
+  soroban contract restore \
+    --id "$TARGET_CONTRACT_ID" \
+    --source "$ADMIN_IDENTITY" \
+    --network "$NETWORK" \
+    --durability persistent 2>&1
+}
+
+# contract_call <function> [args...] — invoke; on an archived-entry error,
+# restore the entries once and retry. Output goes to stdout; returns the
+# final exit status.
+contract_call() {
+  local out rc=0
+  out=$(soroban contract invoke --id "$TARGET_CONTRACT_ID" --source "$ADMIN_IDENTITY" \
+    --network "$NETWORK" -- "$@" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ] && [[ "$out" =~ $ARCHIVED_PATTERN ]]; then
+    log "Archived entries detected during '$1'; restoring and retrying" >&2
+    if ! restore_entries >&2; then
+      echo "$out"
+      return "$rc"
+    fi
+    rc=0
+    out=$(soroban contract invoke --id "$TARGET_CONTRACT_ID" --source "$ADMIN_IDENTITY" \
+      --network "$NETWORK" -- "$@" 2>&1) || rc=$?
+  fi
+  echo "$out"
+  return "$rc"
+}
+
 # ── Safety check ──────────────────────────────────────────────
 if [ "$NETWORK" = "mainnet" ]; then
   echo ""
@@ -67,14 +110,9 @@ if [ "$DRY_RUN" = true ]; then
   ROLLBACK_PROPOSAL_ID="<PROPOSAL_ID_PLACEHOLDER>"
   echo "[dry-run] soroban contract invoke --id $TARGET_CONTRACT_ID --source $ADMIN_IDENTITY --network $NETWORK -- propose_upgrade --admin-signers '[$ADMIN_IDENTITY]' --new-wasm-hash $PREVIOUS_WASM_HASH"
 else
-  PROPOSAL_OUTPUT=$(soroban contract invoke \
-    --id "$TARGET_CONTRACT_ID" \
-    --source "$ADMIN_IDENTITY" \
-    --network "$NETWORK" \
-    -- \
-    propose_upgrade \
+  PROPOSAL_OUTPUT=$(contract_call propose_upgrade \
     --admin-signers "$(soroban keys address "$ADMIN_IDENTITY" 2>/dev/null || echo '<ADMIN>')" \
-    --new-wasm-hash "$PREVIOUS_WASM_HASH" 2>&1)
+    --new-wasm-hash "$PREVIOUS_WASM_HASH")
   log "Proposal output: $PROPOSAL_OUTPUT"
 fi
 
@@ -96,25 +134,15 @@ log "Step 3: Executing rollback upgrade"
 if [ "$DRY_RUN" = true ]; then
   echo "[dry-run] soroban contract invoke --id $TARGET_CONTRACT_ID --source $ADMIN_IDENTITY --network $NETWORK -- execute_upgrade --admin-signers '[$ADMIN_IDENTITY]'"
 else
-  EXECUTE_OUTPUT=$(soroban contract invoke \
-    --id "$TARGET_CONTRACT_ID" \
-    --source "$ADMIN_IDENTITY" \
-    --network "$NETWORK" \
-    -- \
-    execute_upgrade \
-    --admin-signers "$(soroban keys address "$ADMIN_IDENTITY" 2>/dev/null || echo '<ADMIN>')" 2>&1)
+  EXECUTE_OUTPUT=$(contract_call execute_upgrade \
+    --admin-signers "$(soroban keys address "$ADMIN_IDENTITY" 2>/dev/null || echo '<ADMIN>')")
   log "Execute output: $EXECUTE_OUTPUT"
 fi
 
 # ── Step 4: Verify rollback ───────────────────────────────────
 log "Step 4: Verifying rollback"
 if [ "$DRY_RUN" = false ]; then
-  VERIFY_VERSION=$(soroban contract invoke \
-    --id "$TARGET_CONTRACT_ID" \
-    --source "$ADMIN_IDENTITY" \
-    --network "$NETWORK" \
-    -- \
-    get_version 2>/dev/null || echo "VERIFY_FAILED")
+  VERIFY_VERSION=$(contract_call get_version 2>/dev/null || echo "VERIFY_FAILED")
 
   if [ "$VERIFY_VERSION" = "VERIFY_FAILED" ]; then
     log "ERROR: Rollback verification failed — get_version returned an error."
@@ -123,12 +151,7 @@ if [ "$DRY_RUN" = false ]; then
 
   log "Rollback contract version: $VERIFY_VERSION"
 
-  VERIFY_ADMIN=$(soroban contract invoke \
-    --id "$TARGET_CONTRACT_ID" \
-    --source "$ADMIN_IDENTITY" \
-    --network "$NETWORK" \
-    -- \
-    get_admin 2>/dev/null || echo "VERIFY_FAILED")
+  VERIFY_ADMIN=$(contract_call get_admin 2>/dev/null || echo "VERIFY_FAILED")
 
   if [ "$VERIFY_ADMIN" = "VERIFY_FAILED" ]; then
     log "ERROR: Rollback verification failed — get_admin returned an error."

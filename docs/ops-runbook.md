@@ -333,3 +333,12 @@ echo "Pending Upgrade: $(soroban contract invoke --id $CID --source $SRC --netwo
 | Paused pairs | Call `get_paused_pairs()` and alert if non-empty outside maintenance windows |
 | Upgrade activity | Watch for `upgrade_proposed`, `upgrade_executed`, `upgrade_vetoed` events |
 | Service activity | Monitor `service_activity` event timestamps; alert if stale |
+
+## Health check timing and exit codes
+
+`scripts/health_check.sh` bounds every contract call with `timeout`
+(`HC_CALL_TIMEOUT_SECS`, default 10s, plus 1s kill grace). It makes 6 calls,
+so the **worst-case runtime is 6 x (timeout + 1s) = 66s at the default**; this
+bound is verified in `scripts/health_check.test.sh`. Exit codes: `0` healthy,
+`1` failed check (including malformed or contradictory responses), `2` one or
+more calls timed out (state unknown; treat as an incident signal, not a pass).

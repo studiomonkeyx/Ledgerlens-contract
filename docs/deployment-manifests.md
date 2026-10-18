@@ -92,3 +92,26 @@ ERROR: unexpected manifest key 'SECRET_KEY' ...
 - Deployment-time resource use stays bounded to one manifest parse, one Rust
   version probe, one cargo version probe, and one CLI version probe before the
   build starts.
+
+## Live-consistency validation
+
+`validate_manifest` is **schema-only**: it checks that the manifest is
+well-formed and within bounds, and makes no network calls. A manifest can pass
+that and still be wrong for the instance it targets.
+`validate_manifest_live <network> <manifest> <contract-id> <source>` (in
+`deploy/validate_manifest.sh`) additionally queries the deployed instance and
+compares it to these optional per-network manifest keys:
+
+| Key | Compared with |
+| --- | --- |
+| `network` | the requested target network |
+| `deployed_version` | `get_version` on the instance |
+| `expected_admin` | `get_admin` |
+| `expected_service` | `get_service` |
+
+Each mismatch is reported as `manifest claims <fn>=<x> but deployed instance
+'<id>' reports <y>`. The check is optional for testnet/futurenet (skipped with
+no contract id) and **mandatory for mainnet**: a missing contract id or
+missing `deployed_version` claim is an error. It **fails closed**: a missing
+CLI, timeout (`MANIFEST_LIVE_TIMEOUT_SECS`, default 15s) or RPC error blocks
+the deployment. Tests: `scripts/test-deploy-manifest-validation.sh`.
